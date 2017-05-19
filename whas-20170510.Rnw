@@ -1,0 +1,325 @@
+\documentclass[12pt]{article}
+\usepackage{amsmath,amssymb}
+\usepackage[margin=1in]{geometry}
+
+\newcommand{\bs}[1]{\boldsymbol{#1}}
+
+\title{Survival Analysis for Worcester Heart Attack Study}
+\author{Ryan Cooper}
+
+\begin{document}
+\maketitle
+<<echo=F>>=
+opts_chunk$set(echo=F,fig.align='center')
+library(survival)
+library(timereg)
+library(xtable)
+options(xtable.floating = T)
+options(xtable.timestamp = "")
+@
+
+<<setup>>=
+dat = read.csv('whas500.csv',header=T)
+dat = dat[,-(16:20)] # Remove columns not used in the analysis
+
+# Change categorical variables to factor
+dat$gender = factor(dat$gender, labels = c("Male","Female"))
+dat$cvd = factor(dat$cvd, labels = c("No","Yes"))
+dat$afb = factor(dat$afb, labels = c("No","Yes"))
+dat$sho = factor(dat$sho, labels = c("No","Yes"))
+dat$chf = factor(dat$chf, labels = c("No","Yes"))
+dat$av3 = factor(dat$av3, labels = c("No","Yes"))
+dat$miord = factor(dat$miord, labels = c("No","Yes"))
+dat$mitype = factor(dat$mitype, labels = c("No","Yes"))
+dat$year = factor(dat$year, labels = c("1997","1999", "2001"))
+@
+
+\section{Introduction}
+The Worcester Heart Attack Study data set consists of right-censored survival data from 500 patients who experienced an acute miocardial infarction. In this report we model the survival rate using a proportional hazards model. The first part of the analysis consists of analyzing important covariates in predicting survival. These covariates are then used in a backward selection procedure to fit a proportional hazards model. Next we look at the explained variation in some of the models created in the selection process. Lastly, we use the residuals from the model to check the proportional hazards assumption as well as the functional form of the covariates.
+
+\section{Analysis}
+
+<<Univariate_Analysis>>=
+# Add survival response to dat.
+dat$SurvObj = with(dat,Surv(lenfol,fstat))
+
+uni.p = c()
+for(i in 2:14){
+  uni.p[i-1] = summary(coxph(SurvObj ~ dat[,i],
+                             data = dat))$logtest['pvalue']
+}
+uni.p = sapply(uni.p, function(x)max(x,1e-3))
+@
+
+In this data set the time till death for each patient is measured in days from the hospital admission for acute myocardial infarction. Among the 500 patients in the study \Sexpr{table(dat$fstat)[2]} patients died. To model the time till death, we assume the data follows the Cox Proportional Hazards (PH) model,
+\[
+  \lambda(t | \bs{Z}) = \lambda_0(t)e^{\bs{\beta'}\bs{Z}}
+\]
+where $\bs{Z}$ is the vector of covariates listed in Table \ref{tab:uni}. For each covariate we fit a univariate PH model. Table \ref{tab:uni} shows the $p$-value resulting from the partial likelihood ratio test. From the table we see that all variables except for av3 and cvd are significant at the 0.05 level. 
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{clcc}
+  \hline
+  Label & Description & Value  & $p$-value\\
+  \hline
+  age & Age at hospital admission & Years &
+  $< \Sexpr{round(uni.p[1],3)}$\\
+  gender & Gender & Male/Female & \Sexpr{round(uni.p[2],3)}\\
+  hr & Initial Heart Rate & Beats per minute &
+  $< \Sexpr{round(uni.p[3],3)}$\\
+  sysbp & Initial Systolic Blood Pressure & $mmHg$ & 
+  \Sexpr{round(uni.p[4],3)}\\
+  diasbp & Initial Diastolic Blood Pressure & $mmHg$ &
+  $<\Sexpr{round(uni.p[5],3)}$\\
+  bmi & Body Mass Index & $kg/m^2$ & $<\Sexpr{round(uni.p[6],3)}$\\
+  cvd & History of Cardiovascular Disease & Yes/No &
+  \Sexpr{round(uni.p[7],3)}\\
+  afb & Atrial Fibrillation & Yes/No & 
+  \Sexpr{round(uni.p[8],3)}\\
+  sho & Cardiogenic Shock & Yes/No & 
+  $<\Sexpr{round(uni.p[9],3)}$\\
+  chf & Congestive Heart Complications & Yes/No & 
+  $<\Sexpr{round(uni.p[10],3)}$ \\
+  av3 & Complete Heart Block & Yes/No & 
+  \Sexpr{round(uni.p[11],3)}\\
+  miord & MI Order & First/Recurrent &
+  \Sexpr{round(uni.p[12],3)}\\
+  mitype & MI type & Q-wave/non Q-wave & 
+  $<\Sexpr{round(uni.p[13],3)}$\\
+  \hline
+\end{tabular}
+\caption{Regression variables with partial likelihood ratio test $p$-value for determining variable significance in predicting survival}
+\label{tab:uni}
+\end{table}
+
+<<model_selction>>=
+# Fit PH model using significant variables (p<=0.25) in the 
+# univariate analysis.
+
+fit0 = coxph(SurvObj ~ age + gender + hr + sysbp + diasbp + bmi
+            + cvd + afb + chf + miord + mitype,
+            data = dat)
+
+# sysbp has a p-value of 0.91, so remove it from the model
+fit1 = coxph(SurvObj ~ age + gender + hr + diasbp + bmi
+            + cvd + afb + chf + miord + mitype,
+            data = dat)
+p.1 = pchisq(-2*(fit1$loglik[2] - fit0$loglik[2]),
+               df=1, lower.tail = F) 
+# Partial likelihood ratio test p-value = 0.91 
+
+# cvd has a p-value of 0.96, so remove it from the model 
+fit2 = coxph(SurvObj ~ age + gender + hr + diasbp + bmi
+             + afb + chf + miord + mitype,
+            data = dat)
+p.2 = pchisq(-2*(fit2$loglik[2] - fit1$loglik[2]),
+               df=1, lower.tail = F) 
+# Partial likelihood ratio test p-value = 0.95
+
+# miord has a p-value of 0.75, so remove it from the model
+fit3 = coxph(SurvObj ~ age + gender + hr + diasbp + bmi
+             + afb + chf + mitype,
+            data = dat)
+
+p.3 = pchisq(-2*(fit3$loglik[2] - fit2$loglik[2]),
+               df=1, lower.tail = F)
+# Partial likelihood ratio test p-value = 0.76
+
+# afb has a p-value of 0.46, so remove it from the model
+fit4 = coxph(SurvObj ~ age + gender + hr + diasbp + bmi
+             + chf + mitype,
+            data = dat)
+
+p.4 = pchisq(-2*(fit4$loglik[2] - fit3$loglik[2]),
+               df=1, lower.tail = F)
+# Partial likelihood ratio test p-value = 0.46
+
+# mitype has a p-value of 0.34, so remove it from the model
+fit5 = coxph(SurvObj ~ age + gender + hr + diasbp + bmi + chf,
+             data = dat)
+
+p.5 = pchisq(-2*(fit5$loglik[2] - fit4$loglik[2]),
+               df=1, lower.tail = F)
+# Partial likelihood ratio test p-value = 0.33
+
+# No remaining non-significant variables present.
+
+# Don't add av3 back into the model since there were only 7 non-censored patients with "yes" for av3
+
+# Add interactions
+fit6 = coxph(SurvObj ~ age*(gender + hr + diasbp + bmi + chf)
+             + gender*(hr + diasbp + bmi + chf)
+             + hr*(diasbp + bmi + chf)
+             + diasbp*(bmi + chf)
+             + bmi*chf,
+             data = dat)
+
+# Remove bmi*chf (p=0.94) and chf*gender (p=0.94)
+
+fit7 = coxph(SurvObj ~ age*(gender + hr + diasbp + bmi + chf)
+             + gender*(hr + diasbp + bmi)
+             + hr*(diasbp + bmi + chf)
+             + diasbp*(bmi + chf),
+             data = dat)
+
+p.6 = pchisq(-2*(fit7$loglik[2] - fit6$loglik[2]),
+               df=2, lower.tail = F)
+# Partial likelihood ratio test p-value = 0.99
+
+# Remove hr*bmi (p=0.76) and diasbp*chf (p=0.67)
+
+fit8 = coxph(SurvObj ~ age*(gender + hr + diasbp + bmi + chf)
+             + gender*(hr + diasbp + bmi)
+             + hr*(diasbp + chf)
+             + diasbp*bmi,
+             data = dat)
+
+p.7 = pchisq(-2*(fit8$loglik[2] - fit7$loglik[2]),
+               df=2, lower.tail = F)
+# Partial likelihood ratio test p-value = 0.88
+
+# Remove diasbp*bmi (p=0.544) and age*bmi (p=0.44)
+fit9 = coxph(SurvObj ~ age*(gender + hr + diasbp + chf)
+             + gender*(hr + diasbp + bmi)
+             + hr*(diasbp + chf),
+             data = dat)
+
+p.8 = pchisq(-2*(fit9$loglik[2] - fit8$loglik[2]),
+               df=2, lower.tail = F)
+# Partial likelihood ratio test p-value = 0.58
+
+# Remove hr*chf (p=0.42) and gender*bmi (p=0.3)
+fit10 = coxph(SurvObj ~ age*(gender + hr + diasbp + chf)
+             + gender*(hr + diasbp)
+             + hr*diasbp + bmi,
+             data = dat)
+
+p.9 = pchisq(-2*(fit10$loglik[2] - fit9$loglik[2]),
+               df=2, lower.tail = F)
+# Partial likelihood ratio test p-value = 0.39
+
+# Remove hr*diasbp (p=0.25)
+fit11 = coxph(SurvObj ~ age*(gender + hr + diasbp + chf)
+             + gender*(hr + diasbp)+ bmi,
+             data = dat)
+
+# Remove age*hr (p=0.21)
+fit12 = coxph(SurvObj ~ age*(gender + diasbp + chf)
+             + gender*(hr + diasbp)+ bmi,
+             data = dat)
+
+# Remove age*chf (p=0.095)
+fit13 = coxph(SurvObj ~ age*(gender + diasbp)
+             + gender*(hr + diasbp)+ bmi + chf,
+             data = dat)
+
+# Remove gender*hr (p=0.087)
+fit14 = coxph(SurvObj ~ age*(gender + diasbp + chf)
+             + gender*diasbp + hr + bmi + chf,
+             data = dat)
+
+# Remove gender*diasbp (p=0.14)
+fit15 = coxph(SurvObj ~ age*(gender + diasbp + chf)
+             + gender + hr + bmi + chf,
+             data = dat)
+
+# Remove age*diasbp (p=0.11)
+fit16 = coxph(SurvObj ~ age*(gender + chf)
+             + diasbp + gender + hr + bmi + chf,
+             data = dat)
+
+# Remove age*chf (p=0.08)
+fit17 = coxph(SurvObj ~ age*gender
+             + diasbp + gender + hr + bmi + chf,
+             data = dat)
+
+p.10 = pchisq(-2*(fit5$loglik[2] - fit17$loglik[2]),
+               df=1, lower.tail = F)
+@ 
+
+Next we use a backward stepwise selection procedure to obtain a parsimonious model. In our model selection procedure we leave out the covariate Cardiogenic Shock due to the lack of patients with this symptom (only \Sexpr{with(dat, table(sho,fstat)[2,2])} out of the \Sexpr{table(dat$fstat)[2]} non-censored patients had cardiogenic shock). Starting with all covariates significant at the 0.2 level, we use backward stepwise selection removing non-significant variables at level 0.10. Table \ref{tab:M1} shows the resulting main effects model with covariates age, gender, hr, diasbp, bmi and chf. At this stage we add interactions to the model and again use backward stepwise selection removing non-significant variables at level 0.05. The only interaction that survived the selection procedure was age by gender. Table \ref{tab:M2} shows fit of the pruned main effects interaction model. Note that the partial likelihood ratio test comparing the main effects model to the final model is \Sexpr{round(p.10,3)}. Hence the interaction in the final model provides a significant improvement in the fit.
+
+<<modeltables, results='asis'>>=
+captionM1 = paste("Estimated coefficients in the main effects",
+                  "model with standard error and two-sided Wald",
+                  "test p-value."
+)
+
+xtable(fit5, auto=T, digits=3, label="tab:M1", caption=captionM1)
+
+captionM2 = paste("Estimated oefficients in the final model",
+                  "with standard error and two-sided Wald test",
+                  "p-value."
+)
+                  
+xtable(fit17, auto=T, digits=3, label="tab:M2", caption=captionM2)
+@
+
+<<explained_variation>>=
+k = sum(dat$fstat)
+g1 = summary(fit5)$logtest[1]/k
+rho1 = 1-exp(-g1)
+
+g2 = summary(fit17)$logtest[1]/k
+rho2 = 1-exp(-g2)
+
+g3 = summary(fit0)$logtest[1]/k
+rho3 = 1-exp(-g3)
+@
+
+To get a sense of how much the model explains the variation in survival time, we look at a measure of explained variation. More specifically, we calculate Generalized $R^2$ for some of our PH models. This is defined in terms of the Kullback-Liebler information. For the PH model the sample $R^2$ is given by
+\[
+  \hat{\rho}^2 = 1 - e^{-\Gamma}
+\]
+where
+\[
+  \Gamma = 2(\log \bs{L}(\hat{\bs{\beta}}) 
+  - \log \bs{L}(\bs{0}))/k
+\]
+and $k$ is the number of events. The Generalized $R^2$ for the main effects model and the final model are \Sexpr{round(rho1,3)}  and \Sexpr{round(rho2,3)}, respectively. Hence the explained variation between the two models is roughly the same.
+
+<<diagnostics>>=
+# Score process test for proportionality
+sfit = cox.aalen(SurvObj ~ prop(age)*prop(gender) + prop(gender)
+                + prop(hr) + prop(diasbp) + prop(bmi) + prop(chf),
+                weighted.test = 0,dat)
+sp = sfit$pval.Prop
+
+mfit = cox.aalen(SurvObj ~ prop(age)*prop(gender) + prop(gender) 
+                + prop(hr) + prop(diasbp) + prop(bmi) + prop(chf),
+                dat, residuals=1, n.sim=0)
+
+res = cum.residuals(mfit, dat, cum.resid = 1)
+mp = res$pval.test
+@
+
+\begin{table}
+\centering
+\begin{tabular}{lcc}
+\hline
+  & Score $p$-value & MG $p$-value\\
+\hline
+age & \Sexpr{sp[1]} & \Sexpr{mp[1]}\\
+gender & \Sexpr{sp[2]} & NA\\
+hr & \Sexpr{sp[3]} & \Sexpr{mp[2]}\\
+diasbp & \Sexpr{sp[4]} & \Sexpr{mp[3]}\\
+bmi & \Sexpr{sp[5]} & \Sexpr{mp[4]}\\
+chf & \Sexpr{sp[6]} & NA \\
+age:gender & \Sexpr{sp[7]} & \Sexpr{mp[5]}\\
+\hline
+\end{tabular}
+\caption{$p$ values for Score Process test and Cumulative Martingale residuals.}
+\label{tab:res}
+\end{table}
+
+Lastly, we asses the proportional hazards assumption and the functional form of the covariates in the final model using test statistics proposed by Lin et al. (1993) and Wei (1984) based on cumulative residuals. Table \ref{tab:res} shows the $p$-values for the score process test for proportionality and the test for cumulative martingale residuals. The $p$-value for the score process test shows that the proportional hazards assumption is appropriate for all covariates in the final model at the 0.05 significance level. The $p$-value for the cumulative martingale residuals test shows that the scale for all the covariates is acceptable with the possible exception of bmi. Similarly, Figure \ref{fig:cumres} shows the observed cumulative residuals over random realizations of the cumulative residuals under the model assumption. Again we conclude that the functional form of the continuous covariates in the final model is appropriate with the possible exception of bmi.
+
+\begin{figure}
+\caption{Observed cumulative residuals versus continuous covariates with 50 random realizations under the model.}\label{fig:cumres}
+<<cumres, fig.height=6>>=
+par(mfrow = c(2,2), oma = rep(0,4))
+plot(res,score=2)
+@
+\end{figure}
+\end{document}
